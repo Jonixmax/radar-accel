@@ -57,30 +57,66 @@ smooth_ax = smooth_ay = smooth_az = 0.0
 clock = pygame.time.Clock()
 
 # ── Cubo OpenGL ─────────────────────────────────────────────────
-VERTS = [(-1,-1,-1),(1,-1,-1),(1,1,-1),(-1,1,-1),
-         (-1,-1, 1),(1,-1, 1),(1,1, 1),(-1,1, 1)]
-EDGES = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),
-         (6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
-FACES = [(0,1,2,3),(4,5,6,7),(0,1,5,4),
-         (2,3,7,6),(0,3,7,4),(1,2,6,5)]
+import trimesh, numpy as np, warnings
+from OpenGL.GL import *
+import ctypes
 
-def draw_cube(color):
+# Silenciar warning de sklearn
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# ── Cargar GLB con VBO ──────────────────────────────────────────
+mesh_scene = trimesh.load("jeff_o_lantern.glb")
+
+if isinstance(mesh_scene, trimesh.Scene):
+    combined = trimesh.util.concatenate(list(mesh_scene.geometry.values()))
+else:
+    combined = mesh_scene
+
+# Normalizar tamaño y centrar
+combined.vertices -= combined.vertices.mean(axis=0)
+scale = np.max(np.abs(combined.vertices))
+combined.vertices /= scale
+
+vertices = combined.vertices.astype(np.float32)
+faces    = combined.faces.astype(np.uint32)
+
+# Calcular normales para mejor shading
+combined.fix_normals()
+normals = combined.vertex_normals.astype(np.float32)
+
+# Crear VBOs
+vbo_verts = glGenBuffers(1)
+glBindBuffer(GL_ARRAY_BUFFER, vbo_verts)
+glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+
+vbo_norms = glGenBuffers(1)
+glBindBuffer(GL_ARRAY_BUFFER, vbo_norms)
+glBufferData(GL_ARRAY_BUFFER, normals.nbytes, normals, GL_STATIC_DRAW)
+
+ibo = glGenBuffers(1)
+glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo)
+glBufferData(GL_ELEMENT_ARRAY_BUFFER, faces.nbytes, faces, GL_STATIC_DRAW)
+
+n_indices = len(faces) * 3
+
+def draw_model(color):
     r, g, b = color
-    glEnable(GL_BLEND)
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-    glBegin(GL_QUADS)
-    for i, face in enumerate(FACES):
-        shade = 0.4 + 0.1 * i
-        glColor4f(r*shade, g*shade, b*shade, 0.6)
-        for v in face:
-            glVertex3fv(VERTS[v])
-    glEnd()
-    glBegin(GL_LINES)
-    glColor4f(r, g, b, 1.0)
-    for edge in EDGES:
-        for v in edge:
-            glVertex3fv(VERTS[v])
-    glEnd()
+    glColor4f(r, g, b, 0.95)
+
+    glEnableClientState(GL_VERTEX_ARRAY)
+    glEnableClientState(GL_NORMAL_ARRAY)
+
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_verts)
+    glVertexPointer(3, GL_FLOAT, 0, None)
+
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_norms)
+    glNormalPointer(GL_FLOAT, 0, None)
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo)
+    glDrawElements(GL_TRIANGLES, n_indices, GL_UNSIGNED_INT, None)
+
+    glDisableClientState(GL_VERTEX_ARRAY)
+    glDisableClientState(GL_NORMAL_ARRAY)
 
 def setup_3d(viewport_x):
     glViewport(viewport_x, 0, CUBE_W, H)
@@ -89,8 +125,17 @@ def setup_3d(viewport_x):
     gluPerspective(45, CUBE_W / H, 0.1, 50)
     glMatrixMode(GL_MODELVIEW)
     glLoadIdentity()
-    glTranslatef(0, 0, -5)
+    glTranslatef(0, -0.3, -4)  # ← subido y más cerca
     glEnable(GL_DEPTH_TEST)
+
+    # Iluminación simple
+    glEnable(GL_LIGHTING)
+    glEnable(GL_LIGHT0)
+    glEnable(GL_COLOR_MATERIAL)
+    glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
+    glLightfv(GL_LIGHT0, GL_POSITION, [1, 2, 3, 0])
+    glLightfv(GL_LIGHT0, GL_DIFFUSE,  [1, 1, 1, 1])
+    glLightfv(GL_LIGHT0, GL_AMBIENT,  [0.3, 0.3, 0.3, 1])
 
 def render_cube(rx, ry, rz, color):
     setup_3d(RADAR_W)
@@ -99,7 +144,7 @@ def render_cube(rx, ry, rz, color):
     glRotatef(rx, 1, 0, 0)
     glRotatef(ry, 0, 1, 0)
     glRotatef(rz, 0, 0, 1)
-    draw_cube(color)
+    draw_model(color)
     glPopMatrix()
 
 # ── Radar 2D ────────────────────────────────────────────────────
@@ -210,7 +255,7 @@ while running:
 
                 tilt_x = math.degrees(math.asin(max(-1, min(1,  smooth_ax))))  
                 tilt_y = math.degrees(math.asin(max(-1, min(1,  smooth_ay))))
-                
+
                 rot_x = tilt_x   
                 rot_y =  -tilt_y   
                 rot_z = 0         
